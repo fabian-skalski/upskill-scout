@@ -1,0 +1,7 @@
+DevOps Engineer wanted.
+Skills required:
+- CI/CD pipeline management (Jenkins, GitLab CI)
+- Infrastructure as Code (Terraform, Ansible)
+- Linux administration
+- Monitoring tools (Prometheus, Grafana)
+- Scripting (Bash, Python)

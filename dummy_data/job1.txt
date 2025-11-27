@@ -1,0 +1,7 @@
+We are looking for a Senior Python Developer to join our team.
+Required skills:
+- Expert in Python and Django
+- Experience with Docker and Kubernetes
+- Strong understanding of REST APIs
+- Familiarity with PostgreSQL
+- Good communication skills
