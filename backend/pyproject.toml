@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "backend"
+version = "0.1.0"
+description = "Backend for Upskill Scout"
+authors = ["Fabian Skalski"]
+packages = [{include = "*", from="."}]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+fastapi = "^0.122.0"
+uvicorn = "^0.38.0"
+redis = "^7.0.1"
+rq = "^2.6.1"
+pymilvus = "^2.6.4"
+pydantic = "^2.12.5"
+requests = "^2.32.5"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
