@@ -1,0 +1,320 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "${OLLAMA_PORT}:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./init_ollama_models.sh:/init_ollama_models.sh
+    environment:
+      - MODEL_GEN=${MODEL_GEN}
+      - MODEL_EMB=${MODEL_EMB}
+      - OLLAMA_PORT=${OLLAMA_PORT}
+    networks:
+      - upskill-scout-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 12G
+        reservations:
+          memory: 3G
+    healthcheck:
+      test: "bash -c 'cat < /dev/null > /dev/tcp/localhost/11434'"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    # Run the init script after the service starts
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        /bin/ollama serve &
+        /init_ollama_models.sh
+        wait
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "localhost:${FLUENTD_PORT}"
+        mode: non-blocking
+        tag: "ollama"
+
+  llm-service:
+    build:
+      context: ./llm-service
+      args:
+        - LLM_SERVICE_INTERNAL_PORT=${LLM_SERVICE_INTERNAL_PORT}
+    ports:
+      - "${LLM_SERVICE_PORT}:${LLM_SERVICE_INTERNAL_PORT}"
+    volumes:
+      - ./llm-service:/app
+    environment:
+      - LLM_SERVICE_INTERNAL_PORT=${LLM_SERVICE_INTERNAL_PORT}
+      - OLLAMA_BASE_URL=http://ollama:${OLLAMA_PORT}
+      - MODEL_GEN=${MODEL_GEN}
+      - MODEL_EMB=${MODEL_EMB}
+      - EMBEDDING_DIM=${EMBEDDING_DIM}
+      - PROMPT_EXTRACT=${PROMPT_EXTRACT}
+      - GEN_TEMPERATURE=${GEN_TEMPERATURE}
+      - GEN_MAX_TOKENS=${GEN_MAX_TOKENS}
+      - GEN_TIMEOUT=${GEN_TIMEOUT}
+      - EMB_TIMEOUT=${EMB_TIMEOUT}
+    depends_on:
+      - ollama
+      - fluentd
+    networks:
+      - upskill-scout-network
+    healthcheck:
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "localhost:${FLUENTD_PORT}"
+        mode: non-blocking
+        tag: "llm-service"
+
+  backend:
+    build:
+      context: ./backend
+      args:
+        - BACKEND_INTERNAL_PORT=${BACKEND_INTERNAL_PORT}
+    ports:
+      - "${BACKEND_PORT}:${BACKEND_INTERNAL_PORT}"
+    volumes:
+      - ./backend:/app
+      - ./dummy_data:/app/dummy_data
+    environment:
+      - BACKEND_INTERNAL_PORT=${BACKEND_INTERNAL_PORT}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_RETRIES=${REDIS_RETRIES}
+      - REDIS_DB=${REDIS_DB}
+      - MILVUS_URI=${MILVUS_URI}
+      - MILVUS_DB_NAME=${MILVUS_DB_NAME}
+      - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME}
+      - LLM_SERVICE_URL=${LLM_SERVICE_URL}
+      - EMBEDDING_DIM=${EMBEDDING_DIM}
+    depends_on:
+      - redis
+      - llm-service
+      - milvus_standalone
+      - fluentd
+    networks:
+      - upskill-scout-network
+    healthcheck:
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "localhost:${FLUENTD_PORT}"
+        mode: non-blocking
+        tag: "backend"
+
+  backend-workers:
+    build:
+      context: ./backend
+      args:
+        - BACKEND_INTERNAL_PORT=${BACKEND_INTERNAL_PORT}
+    command: python run_workers.py
+    deploy:
+      replicas: 3
+    volumes:
+      - ./backend:/app
+    environment:
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_DB=${REDIS_DB}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_RETRIES=${REDIS_RETRIES}
+      - MILVUS_URI=${MILVUS_URI}
+      - MILVUS_DB_NAME=${MILVUS_DB_NAME}
+      - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME}
+      - LLM_SERVICE_URL=${LLM_SERVICE_URL}
+      - EMBEDDING_DIM=${EMBEDDING_DIM}
+    depends_on:
+      - redis
+      - llm-service
+      - milvus_standalone
+      - fluentd
+    networks:
+      - upskill-scout-network
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "localhost:${FLUENTD_PORT}"
+        mode: non-blocking
+        tag: "backend-workers"
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "${REDIS_PORT}:${REDIS_INTERNAL_PORT}"
+    volumes:
+      - redis_data:/data
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    networks:
+      - upskill-scout-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "localhost:${FLUENTD_PORT}"
+        mode: non-blocking
+        tag: "redis"
+
+  redisinsight:
+    image: redislabs/redisinsight
+    ports:
+      - "${REDISINSIGHT_PORT}:${REDISINSIGHT_INTERNAL_PORT}"
+    volumes:
+      - redisinsight_data:/db
+    depends_on:
+      - redis
+      - fluentd
+    restart: always
+    networks:
+      - upskill-scout-network
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "localhost:${FLUENTD_PORT}"
+        mode: non-blocking
+        tag: "redisinsight"
+
+  etcd:
+    container_name: milvus-etcd
+    image: quay.io/coreos/etcd:v3.5.5
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/etcd:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:${ETCD_PORT} -listen-client-urls http://0.0.0.0:${ETCD_PORT} --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - upskill-scout-network
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "localhost:${FLUENTD_PORT}"
+        mode: non-blocking
+        tag: "etcd"
+
+  minio:
+    container_name: milvus-minio
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    environment:
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+    ports:
+      - "${MINIO_CONSOLE_PORT}:${MINIO_CONSOLE_PORT}"
+      - "${MINIO_API_PORT}:${MINIO_API_PORT}"
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/minio:/minio_data
+    command: minio server /minio_data --console-address ":${MINIO_CONSOLE_PORT}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${MINIO_API_PORT}/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - upskill-scout-network
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "localhost:${FLUENTD_PORT}"
+        mode: non-blocking
+        tag: "minio"
+
+  milvus_standalone:
+    container_name: milvus-standalone
+    image: milvusdb/milvus:v2.3.21
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+    - seccomp:unconfined
+    environment:
+      - ETCD_ENDPOINTS=${ETCD_ENDPOINTS}
+      - MINIO_ADDRESS=${MINIO_ADDRESS}
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/milvus:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${MILVUS_METRICS_PORT}/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    ports:
+      - "${MILVUS_PORT}:${MILVUS_PORT}"
+      - "${MILVUS_METRICS_PORT}:${MILVUS_METRICS_PORT}"
+    depends_on:
+      - etcd
+      - minio
+      - fluentd
+    networks:
+      - upskill-scout-network
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "localhost:${FLUENTD_PORT}"
+        mode: non-blocking
+        tag: "milvus_standalone"
+
+  attu:
+    container_name: attu
+    image: zilliz/attu:v2.3.10
+    environment:
+      - MILVUS_URL=${MILVUS_URI}
+      - MILVUS_DB_NAME=${MILVUS_DB_NAME}
+    ports:
+      - "8002:3000"
+    depends_on:
+      - milvus_standalone
+      - fluentd
+    networks:
+      - upskill-scout-network
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "localhost:${FLUENTD_PORT}"
+        mode: non-blocking
+        tag: "attu"
+
+  fluentd:
+    image: fluent/fluentd:v1.16-1
+    container_name: fluentd
+    volumes:
+      - ./fluentd/conf:/fluentd/etc
+    ports:
+      - "${FLUENTD_PORT}:${FLUENTD_PORT}"
+      - "${FLUENTD_PORT}:${FLUENTD_PORT}/udp"
+    networks:
+      - upskill-scout-network
+
+volumes:
+  milvus_data:
+  redis_data:
+  redisinsight_data:
+  ollama_data:
+
+networks:
+  upskill-scout-network:
+    driver: bridge
