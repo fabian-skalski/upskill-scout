@@ -1,7 +1,0 @@
-Data Scientist position available.
-Responsibilities:
-- Analyze large datasets using Python (Pandas, NumPy)
-- Build machine learning models (Scikit-learn, TensorFlow)
-- Visualize data insights
-- SQL expertise is a must
-- Experience with cloud platforms (AWS/GCP)

@@ -1,7 +1,0 @@
-Frontend Engineer needed for a fast-paced startup.
-Must have:
-- React.js and TypeScript proficiency
-- Experience with Tailwind CSS
-- Knowledge of state management (Redux, Zustand)
-- Ability to write clean, maintainable code
-- Team player attitude
