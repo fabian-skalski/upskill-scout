@@ -1,0 +1,50 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Sub-folder Script",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}",
+                "PYTHONUNBUFFERED": "1"
+            },
+            "justMyCode": true,
+            "python": "${workspaceFolder}/.venv/bin/python"
+        },
+        {
+            "name": "Poetry Debug Backend",
+            "type": "debugpy",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/backend",
+            "module": "uvicorn",
+            "args": [
+                "main:app",
+                "--host", "127.0.0.1",
+                "--port", "8000",
+            ],
+            "python": "${workspaceFolder}/backend/.venv/bin/python",
+            "envFile": "${workspaceFolder}/.env",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+        },
+        {
+            "name": "Poetry Debug LLM Service",
+            "type": "debugpy",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/llm-service",
+            "module": "uvicorn",
+            "args": [
+                "main:app",
+                "--host", "127.0.0.1",
+                "--port", "8001",
+            ],
+            "python": "${workspaceFolder}/llm-service/.venv/bin/python",
+            "envFile": "${workspaceFolder}/.env",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+        }
+    ]
+}
