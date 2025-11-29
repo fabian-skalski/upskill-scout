@@ -3,7 +3,7 @@ services:
     image: ollama/ollama:latest
     container_name: ollama
     ports:
-      - "${OLLAMA_PORT}:11434"
+      - "${OLLAMA_PORT}:${OLLAMA_INTERNAL_PORT}"
     volumes:
       - ollama_data:/root/.ollama
       - ./init_ollama_models.sh:/init_ollama_models.sh
@@ -13,15 +13,17 @@ services:
       - OLLAMA_PORT=${OLLAMA_PORT}
     networks:
       - upskill-scout-network
+    depends_on:
+      - fluentd
     restart: unless-stopped
     deploy:
       resources:
         limits:
-          memory: 12G
+          memory: 8G
         reservations:
-          memory: 3G
+          memory: 4G
     healthcheck:
-      test: "bash -c 'cat < /dev/null > /dev/tcp/localhost/11434'"
+      test: "bash -c 'cat < /dev/null > /dev/tcp/localhost/${OLLAMA_INTERNAL_PORT}'"
       interval: 30s
       timeout: 10s
       retries: 5
@@ -65,7 +67,14 @@ services:
       - fluentd
     networks:
       - upskill-scout-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
     healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${LLM_SERVICE_INTERNAL_PORT}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -106,7 +115,14 @@ services:
       - fluentd
     networks:
       - upskill-scout-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
     healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${BACKEND_INTERNAL_PORT}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -118,41 +134,6 @@ services:
         mode: non-blocking
         tag: "backend"
 
-  backend-workers:
-    build:
-      context: ./backend
-      args:
-        - BACKEND_INTERNAL_PORT=${BACKEND_INTERNAL_PORT}
-    command: python run_workers.py
-    deploy:
-      replicas: 3
-    volumes:
-      - ./backend:/app
-    environment:
-      - REDIS_HOST=${REDIS_HOST}
-      - REDIS_PORT=${REDIS_PORT}
-      - REDIS_DB=${REDIS_DB}
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - REDIS_RETRIES=${REDIS_RETRIES}
-      - MILVUS_URI=${MILVUS_URI}
-      - MILVUS_DB_NAME=${MILVUS_DB_NAME}
-      - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME}
-      - LLM_SERVICE_URL=${LLM_SERVICE_URL}
-      - EMBEDDING_DIM=${EMBEDDING_DIM}
-    depends_on:
-      - redis
-      - llm-service
-      - milvus_standalone
-      - fluentd
-    networks:
-      - upskill-scout-network
-    logging:
-      driver: "fluentd"
-      options:
-        fluentd-address: "localhost:${FLUENTD_PORT}"
-        mode: non-blocking
-        tag: "backend-workers"
-
   redis:
     image: redis:alpine
     ports:
@@ -163,6 +144,14 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD}
     networks:
       - upskill-scout-network
+    depends_on:
+      - fluentd
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -205,6 +194,14 @@ services:
     volumes:
       - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/etcd:/etcd
     command: etcd -advertise-client-urls=http://127.0.0.1:${ETCD_PORT} -listen-client-urls http://0.0.0.0:${ETCD_PORT} --data-dir /etcd
+    depends_on:
+      - fluentd
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health"]
       interval: 30s
@@ -231,6 +228,14 @@ services:
     volumes:
       - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/minio:/minio_data
     command: minio server /minio_data --console-address ":${MINIO_CONSOLE_PORT}"
+    depends_on:
+      - fluentd
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${MINIO_API_PORT}/minio/health/live"]
       interval: 30s
@@ -250,12 +255,18 @@ services:
     image: milvusdb/milvus:v2.3.21
     command: ["milvus", "run", "standalone"]
     security_opt:
-    - seccomp:unconfined
+      - seccomp:unconfined
     environment:
       - ETCD_ENDPOINTS=${ETCD_ENDPOINTS}
       - MINIO_ADDRESS=${MINIO_ADDRESS}
     volumes:
       - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/milvus:/var/lib/milvus
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${MILVUS_METRICS_PORT}/healthz"]
       interval: 30s
@@ -285,7 +296,7 @@ services:
       - MILVUS_URL=${MILVUS_URI}
       - MILVUS_DB_NAME=${MILVUS_DB_NAME}
     ports:
-      - "8002:3000"
+      - "${ATTU_PORT}:${ATTU_INTERNAL_PORT}"
     depends_on:
       - milvus_standalone
       - fluentd
@@ -306,14 +317,213 @@ services:
     ports:
       - "${FLUENTD_PORT}:${FLUENTD_PORT}"
       - "${FLUENTD_PORT}:${FLUENTD_PORT}/udp"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
     networks:
       - upskill-scout-network
+
+  postgres:
+    image: postgres:13
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    networks:
+      - upskill-scout-network
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
+      interval: 5s
+      retries: 5
+    depends_on:
+      - fluentd
+    ports:
+      - "${POSTGRES_PORT}:${POSTGRES_INTERNAL_PORT}" 
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  airflow-init:
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
+      - AIRFLOW__CELERY__BROKER_URL=redis://redis:${REDIS_PORT}/0
+      - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY}
+      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=false
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - _AIRFLOW_DB_UPGRADE=true
+      - _AIRFLOW_WWW_USER_CREATE=true
+      - _AIRFLOW_WWW_USER_USERNAME=${AIRFLOW_WWW_USER_USERNAME}
+      - _AIRFLOW_WWW_USER_PASSWORD=${AIRFLOW_WWW_USER_PASSWORD}
+    depends_on:
+      - postgres
+      - redis
+      - fluentd
+    networks:
+      - upskill-scout-network
+    command: version
+
+  airflow-webserver:
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    restart: always
+    depends_on:
+      - postgres
+      - redis
+      - airflow-init
+      - fluentd
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
+      - AIRFLOW__CELERY__BROKER_URL=redis://redis:${REDIS_PORT}/0
+      - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY}
+      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=false
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth
+      - AIRFLOW__WEBSERVER__WORKERS=1
+      - AIRFLOW__WEBSERVER__WORKER_REFRESH_INTERVAL=1800
+      - AIRFLOW__WEBSERVER__WEB_SERVER_MASTER_TIMEOUT=300
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./airflow_tasks:/opt/airflow/airflow_tasks
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
+    ports:
+      - "${AIRFLOW_WEBSERVER_PORT}:${AIRFLOW_WEBSERVER_INTERNAL_PORT}"
+    networks:
+      - upskill-scout-network
+    command: webserver
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:${AIRFLOW_WEBSERVER_INTERNAL_PORT}/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  airflow-scheduler:
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    restart: always
+    depends_on:
+      - postgres
+      - redis
+      - airflow-init
+      - fluentd
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
+      - AIRFLOW__CELERY__BROKER_URL=redis://redis:${REDIS_PORT}/0
+      - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY}
+      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=false
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth
+      # Worker env vars for tasks
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_DB=${REDIS_DB}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_RETRIES=${REDIS_RETRIES}
+      - MILVUS_URI=${MILVUS_URI}
+      - MILVUS_DB_NAME=${MILVUS_DB_NAME}
+      - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME}
+      - LLM_SERVICE_URL=${LLM_SERVICE_URL}
+      - EMBEDDING_DIM=${EMBEDDING_DIM}
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./airflow_tasks:/opt/airflow/airflow_tasks
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+    networks:
+      - upskill-scout-network
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  airflow-worker:
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    restart: always
+    depends_on:
+      - postgres
+      - redis
+      - airflow-init
+      - fluentd
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
+      - AIRFLOW__CELERY__BROKER_URL=redis://redis:${REDIS_PORT}/0
+      - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY}
+      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=false
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth
+      # Worker env vars for tasks
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_DB=${REDIS_DB}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_RETRIES=${REDIS_RETRIES}
+      - MILVUS_URI=${MILVUS_URI}
+      - MILVUS_DB_NAME=${MILVUS_DB_NAME}
+      - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME}
+      - LLM_SERVICE_URL=${LLM_SERVICE_URL}
+      - EMBEDDING_DIM=${EMBEDDING_DIM}
+      - PYTHONPATH=/opt/airflow/airflow_tasks
+      # Limit concurrency to prevent OOM with 1G memory limit
+      - AIRFLOW__CELERY__WORKER_CONCURRENCY=1
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./airflow_tasks:/opt/airflow/airflow_tasks
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+    networks:
+      - upskill-scout-network
+    command: celery worker
+    healthcheck:
+      test: ["CMD-SHELL", "celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d celery@$${HOSTNAME}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
 volumes:
   milvus_data:
   redis_data:
   redisinsight_data:
   ollama_data:
+  postgres_data:
 
 networks:
   upskill-scout-network:

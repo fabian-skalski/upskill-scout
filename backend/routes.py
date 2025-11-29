@@ -4,6 +4,7 @@ Handles HTTP endpoints and request/response logic.
 """
 from fastapi import APIRouter, HTTPException
 import hashlib
+import requests
 from models import TextSubmission, SubmissionResponse, ProcessedJob, PipelineStep
 from queue_manager import enqueue_job, get_job_status_from_cache
 
@@ -13,7 +14,7 @@ router = APIRouter()
 async def submit_text(submission: TextSubmission):
     """
     API endpoint to submit text for processing.
-    Enqueues the job to workers and returns immediately.
+    Triggers the Airflow DAG and returns immediately.
     """
     text_hash = hashlib.sha256(submission.description.encode()).hexdigest()
     
@@ -21,12 +22,23 @@ async def submit_text(submission: TextSubmission):
         original_text=submission.description,
         source_url=submission.sourceUrl,
         timestamp=submission.timestamp,
+        user_id=submission.user_id,
         text_hash=text_hash,
         step=PipelineStep.RECEIVED
     )
 
-    # Enqueue job to background workers
-    enqueue_job(job_payload)
+    # Trigger Airflow DAG
+    airflow_url = "http://airflow-webserver:8080/api/v1/dags/data_processing_pipeline/dagRuns"
+    try:
+        # Basic Auth for Airflow (default is airflow:airflow)
+        response = requests.post(
+            airflow_url,
+            json={"conf": job_payload.dict()},
+            auth=("airflow", "airflow")
+        )
+        response.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to trigger Airflow DAG: {e}")
 
     return SubmissionResponse(
         message="Text received and processing started.",

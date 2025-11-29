@@ -17,9 +17,10 @@ MILVUS_COLLECTION_NAME = os.getenv("MILVUS_COLLECTION_NAME")
 def submit_job():
     print("Submitting job...")
     payload = {
-        "description": "We are looking for a Python Engineering Manager with experience in FastAPI and Milvus vector and Snowflake database. " * 10, # Make it long enough to potentially be truncated in Redis/Milvus
+        "description": "We are looking for a new (!!!) Python Engineering Manager with experience in FastAPI and Milvus vector and Snowflake database. " * 10, # Make it long enough to potentially be truncated in Redis/Milvus
         "sourceUrl": "https://example.com/job/12345",
         "timestamp": "2025-11-28T11:00:00Z",
+        "user_id": "test_user_001"
     }
     try:
         response = requests.post(f"{BACKEND_URL}/text", json=payload)
