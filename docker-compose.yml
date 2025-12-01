@@ -1,91 +1,5 @@
 services:
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    ports:
-      - "${OLLAMA_PORT}:${OLLAMA_INTERNAL_PORT}"
-    volumes:
-      - ollama_data:/root/.ollama
-      - ./init_ollama_models.sh:/init_ollama_models.sh
-    environment:
-      - MODEL_GEN=${MODEL_GEN}
-      - MODEL_EMB=${MODEL_EMB}
-      - OLLAMA_PORT=${OLLAMA_PORT}
-    networks:
-      - upskill-scout-network
-    depends_on:
-      - fluentd
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 8G
-        reservations:
-          memory: 4G
-    healthcheck:
-      test: "bash -c 'cat < /dev/null > /dev/tcp/localhost/${OLLAMA_INTERNAL_PORT}'"
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    # Run the init script after the service starts
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        /bin/ollama serve &
-        /init_ollama_models.sh
-        wait
-    logging:
-      driver: "fluentd"
-      options:
-        fluentd-address: "localhost:${FLUENTD_PORT}"
-        mode: non-blocking
-        tag: "ollama"
-
-  llm-service:
-    build:
-      context: ./llm-service
-      args:
-        - LLM_SERVICE_INTERNAL_PORT=${LLM_SERVICE_INTERNAL_PORT}
-    ports:
-      - "${LLM_SERVICE_PORT}:${LLM_SERVICE_INTERNAL_PORT}"
-    volumes:
-      - ./llm-service:/app
-    environment:
-      - LLM_SERVICE_INTERNAL_PORT=${LLM_SERVICE_INTERNAL_PORT}
-      - OLLAMA_BASE_URL=http://ollama:${OLLAMA_PORT}
-      - MODEL_GEN=${MODEL_GEN}
-      - MODEL_EMB=${MODEL_EMB}
-      - EMBEDDING_DIM=${EMBEDDING_DIM}
-      - PROMPT_EXTRACT=${PROMPT_EXTRACT}
-      - GEN_TEMPERATURE=${GEN_TEMPERATURE}
-      - GEN_MAX_TOKENS=${GEN_MAX_TOKENS}
-      - GEN_TIMEOUT=${GEN_TIMEOUT}
-      - EMB_TIMEOUT=${EMB_TIMEOUT}
-    depends_on:
-      - ollama
-      - fluentd
-    networks:
-      - upskill-scout-network
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-        reservations:
-          memory: 256M
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${LLM_SERVICE_INTERNAL_PORT}/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    logging:
-      driver: "fluentd"
-      options:
-        fluentd-address: "localhost:${FLUENTD_PORT}"
-        mode: non-blocking
-        tag: "llm-service"
-
+  # Backend API service
   backend:
     build:
       context: ./backend
@@ -93,24 +7,39 @@ services:
         - BACKEND_INTERNAL_PORT=${BACKEND_INTERNAL_PORT}
     ports:
       - "${BACKEND_PORT}:${BACKEND_INTERNAL_PORT}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # TODO remove in production
     volumes:
       - ./backend:/app
-      - ./dummy_data:/app/dummy_data
     environment:
       - BACKEND_INTERNAL_PORT=${BACKEND_INTERNAL_PORT}
-      - REDIS_HOST=${REDIS_HOST}
-      - REDIS_PORT=${REDIS_PORT}
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - REDIS_RETRIES=${REDIS_RETRIES}
-      - REDIS_DB=${REDIS_DB}
-      - MILVUS_URI=${MILVUS_URI}
+      # Airflow settings
+      - AIRFLOW_BASE_URL=http://airflow-api:${AIRFLOW_API_INTERNAL_PORT}/api/v2
+      - AIRFLOW_USERNAME=${AIRFLOW_WWW_USER_USERNAME}
+      - AIRFLOW_PASSWORD=${AIRFLOW_WWW_USER_PASSWORD}
+      # Milvus settings
       - MILVUS_DB_NAME=${MILVUS_DB_NAME}
       - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME}
-      - LLM_SERVICE_URL=${LLM_SERVICE_URL}
+      - MILVUS_URI=${MILVUS_URI}
+      # Ollama settings
       - EMBEDDING_DIM=${EMBEDDING_DIM}
+      - OLLAMA_BASE_URL=http://host.docker.internal:${OLLAMA_PORT} # TODO change in production
+      - MODEL_GEN=${MODEL_GEN}
+      - MODEL_EMB=${MODEL_EMB}
+      - UMAP_N_COMPONENTS=${UMAP_N_COMPONENTS}
+      - GEN_TEMPERATURE=${GEN_TEMPERATURE}
+      - GEN_MAX_TOKENS=${GEN_MAX_TOKENS}
+      - GEN_MAX_RETRIES=${GEN_MAX_RETRIES}
+      - MIN_POSTS_FOR_OVERVIEW=${MIN_POSTS_FOR_OVERVIEW}
+      - REQUEST_TIMEOUT=${REQUEST_TIMEOUT}
+      # MLflow S3/MinIO settings for artifact storage
+      - MLFLOW_TRACKING_URI=http://mlflow:${MLFLOW_INTERNAL_PORT}
+      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY}
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:${MINIO_API_PORT}
+      - MLFLOW_S3_IGNORE_TLS=true
     depends_on:
-      - redis
-      - llm-service
+      # - ollama TODO include in production
       - milvus_standalone
       - fluentd
     networks:
@@ -126,7 +55,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 10s
     logging:
       driver: "fluentd"
       options:
@@ -134,6 +63,7 @@ services:
         mode: non-blocking
         tag: "backend"
 
+  # Redis for Airflow Celery broker
   redis:
     image: redis:alpine
     ports:
@@ -164,25 +94,7 @@ services:
         mode: non-blocking
         tag: "redis"
 
-  redisinsight:
-    image: redislabs/redisinsight
-    ports:
-      - "${REDISINSIGHT_PORT}:${REDISINSIGHT_INTERNAL_PORT}"
-    volumes:
-      - redisinsight_data:/db
-    depends_on:
-      - redis
-      - fluentd
-    restart: always
-    networks:
-      - upskill-scout-network
-    logging:
-      driver: "fluentd"
-      options:
-        fluentd-address: "localhost:${FLUENTD_PORT}"
-        mode: non-blocking
-        tag: "redisinsight"
-
+  # etcd for Milvus metadata storage
   etcd:
     container_name: milvus-etcd
     image: quay.io/coreos/etcd:v3.5.5
@@ -192,7 +104,7 @@ services:
       - ETCD_QUOTA_BACKEND_BYTES=4294967296
       - ETCD_SNAPSHOT_COUNT=50000
     volumes:
-      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/etcd:/etcd
+      - ./volumes/etcd:/etcd
     command: etcd -advertise-client-urls=http://127.0.0.1:${ETCD_PORT} -listen-client-urls http://0.0.0.0:${ETCD_PORT} --data-dir /etcd
     depends_on:
       - fluentd
@@ -216,18 +128,29 @@ services:
         mode: non-blocking
         tag: "etcd"
 
+  # MinIO for MLflow artifact storage
   minio:
     container_name: milvus-minio
     image: minio/minio:RELEASE.2023-03-20T20-16-18Z
     environment:
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+      - MINIO_STORAGE_USE_HTTPS=false
+      - MINIO_API_PORT=${MINIO_API_PORT}
+      - MINIO_CONSOLE_PORT=${MINIO_CONSOLE_PORT}
+      - MLFLOW_BUCKET_NAME=${MLFLOW_BUCKET_NAME_MINIO}
     ports:
       - "${MINIO_CONSOLE_PORT}:${MINIO_CONSOLE_PORT}"
       - "${MINIO_API_PORT}:${MINIO_API_PORT}"
     volumes:
-      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/minio:/minio_data
-    command: minio server /minio_data --console-address ":${MINIO_CONSOLE_PORT}"
+      - ./volumes/minio:/minio_data
+      - ./minio/init.sh:/init.sh
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      # Run the init script after the service starts as we need to create the utilized bucket
+      - |
+        chmod +x /init.sh
+        /init.sh
     depends_on:
       - fluentd
     deploy:
@@ -250,6 +173,7 @@ services:
         mode: non-blocking
         tag: "minio"
 
+  # Milvus vector database storing the user-specific vectors and ML results
   milvus_standalone:
     container_name: milvus-standalone
     image: milvusdb/milvus:v2.3.21
@@ -260,7 +184,7 @@ services:
       - ETCD_ENDPOINTS=${ETCD_ENDPOINTS}
       - MINIO_ADDRESS=${MINIO_ADDRESS}
     volumes:
-      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/milvus:/var/lib/milvus
+      - ./volumes/milvus:/var/lib/milvus
     deploy:
       resources:
         limits:
@@ -289,6 +213,7 @@ services:
         mode: non-blocking
         tag: "milvus_standalone"
 
+  # Attu vector indexing service for Milvus, may be removed in production later
   attu:
     container_name: attu
     image: zilliz/attu:v2.3.10
@@ -309,6 +234,7 @@ services:
         mode: non-blocking
         tag: "attu"
 
+  # Fluentd for centralized logging
   fluentd:
     image: fluent/fluentd:v1.16-1
     container_name: fluentd
@@ -326,12 +252,15 @@ services:
     networks:
       - upskill-scout-network
 
+  # PostgreSQL database for Airflow metadata and MLflow backend store
   postgres:
     image: postgres:13
     environment:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_DB=${POSTGRES_DB_AIRFLOW}
+      - POSTGRES_DB_AIRFLOW=${POSTGRES_DB_AIRFLOW}
+      - POSTGRES_DB_MLFLOW=${POSTGRES_DB_MLFLOW}
     deploy:
       resources:
         limits:
@@ -350,56 +279,48 @@ services:
       - "${POSTGRES_PORT}:${POSTGRES_INTERNAL_PORT}" 
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Initialize databases
+      - ./postgres/init.sh:/docker-entrypoint-initdb.d/init.sh
 
-  airflow-init:
+  # Airflow API server for task execution and orchestration
+  airflow-api:
     build:
       context: .
       dockerfile: airflow/Dockerfile
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
-      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
-      - AIRFLOW__CELERY__BROKER_URL=redis://redis:${REDIS_PORT}/0
-      - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY}
-      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=false
-      - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - _AIRFLOW_DB_UPGRADE=true
-      - _AIRFLOW_WWW_USER_CREATE=true
-      - _AIRFLOW_WWW_USER_USERNAME=${AIRFLOW_WWW_USER_USERNAME}
-      - _AIRFLOW_WWW_USER_PASSWORD=${AIRFLOW_WWW_USER_PASSWORD}
-    depends_on:
-      - postgres
-      - redis
-      - fluentd
-    networks:
-      - upskill-scout-network
-    command: version
-
-  airflow-webserver:
-    build:
-      context: .
-      dockerfile: airflow/Dockerfile
+      args:
+        - AIRFLOW_USER=${AIRFLOW_WWW_USER_USERNAME}
     restart: always
     depends_on:
-      - postgres
-      - redis
-      - airflow-init
-      - fluentd
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+      fluentd:
+        condition: service_started
     environment:
+      # Airflow core settings
       - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
-      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
-      - AIRFLOW__CELERY__BROKER_URL=redis://redis:${REDIS_PORT}/0
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB_AIRFLOW}
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB_AIRFLOW}
+      - AIRFLOW__CELERY__BROKER_URL=redis://redis:${REDIS_PORT}/${REDIS_DB}
       - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY}
       - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=false
       - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth
-      - AIRFLOW__WEBSERVER__WORKERS=1
+      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.default
+      - AIRFLOW__WEBSERVER__WORKERS=${AIRFLOW_API_WORKERS}
       - AIRFLOW__WEBSERVER__WORKER_REFRESH_INTERVAL=1800
-      - AIRFLOW__WEBSERVER__WEB_SERVER_MASTER_TIMEOUT=300
+      - AIRFLOW__WEBSERVER__WEB_SERVER_MASTER_TIMEOUT=${REQUEST_TIMEOUT}
+      # Task SDK JWT authentication
+      - AIRFLOW__API_AUTH__JWT_SECRET=${AIRFLOW_FERNET_KEY}
+      - AIRFLOW__CORE__AUTH_MANAGER=airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      - AIRFLOW__CORE__INTERNAL_API_SECRET_KEY=${AIRFLOW_FERNET_KEY}
     volumes:
-      - ./dags:/opt/airflow/dags
-      - ./airflow_tasks:/opt/airflow/airflow_tasks
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/common:/opt/airflow/common
+      - ./airflow/pipelines:/opt/airflow/pipelines
+      - ./airflow/logs:/opt/airflow/logs
     deploy:
       resources:
         limits:
@@ -407,49 +328,70 @@ services:
         reservations:
           memory: 1G
     ports:
-      - "${AIRFLOW_WEBSERVER_PORT}:${AIRFLOW_WEBSERVER_INTERNAL_PORT}"
+      - "${AIRFLOW_API_PORT}:${AIRFLOW_API_INTERNAL_PORT}"
     networks:
       - upskill-scout-network
-    command: webserver
+    command: api-server
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:${AIRFLOW_WEBSERVER_INTERNAL_PORT}/health"]
+      test: ["CMD", "curl", "--fail", "http://localhost:${AIRFLOW_API_INTERNAL_PORT}/api/v2/monitor/health"]
       interval: 10s
       timeout: 10s
       retries: 5
 
+  # Airflow Scheduler for scheduling tasks
   airflow-scheduler:
     build:
       context: .
       dockerfile: airflow/Dockerfile
+      args:
+        - AIRFLOW_USER=${AIRFLOW_WWW_USER_USERNAME}
     restart: always
     depends_on:
-      - postgres
-      - redis
-      - airflow-init
-      - fluentd
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+      fluentd:
+        condition: service_started
     environment:
+      # Airflow core settings
       - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
-      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
-      - AIRFLOW__CELERY__BROKER_URL=redis://redis:${REDIS_PORT}/0
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB_AIRFLOW}
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB_AIRFLOW}
+      - AIRFLOW__CELERY__BROKER_URL=redis://redis:${REDIS_PORT}/${REDIS_DB}
       - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY}
       - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=false
       - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth
+      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.default
+      # Task SDK JWT authentication
+      - AIRFLOW__CORE__AUTH_MANAGER=airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      - AIRFLOW__API_AUTH__JWT_SECRET=${AIRFLOW_FERNET_KEY}
+      - AIRFLOW__CORE__INTERNAL_API_SECRET_KEY=${AIRFLOW_FERNET_KEY}
+      # Airflow 3.x: Force using serialized DAGs from DB
+      - AIRFLOW__CORE__MIN_SERIALIZED_DAG_UPDATE_INTERVAL=30
+      - AIRFLOW__CORE__MIN_SERIALIZED_DAG_FETCH_INTERVAL=10
+      - AIRFLOW__CORE__STORE_SERIALIZED_DAGS=True
+      - AIRFLOW__CORE__STORE_DAG_CODE=True
       # Worker env vars for tasks
-      - REDIS_HOST=${REDIS_HOST}
-      - REDIS_PORT=${REDIS_PORT}
-      - REDIS_DB=${REDIS_DB}
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - REDIS_RETRIES=${REDIS_RETRIES}
       - MILVUS_URI=${MILVUS_URI}
       - MILVUS_DB_NAME=${MILVUS_DB_NAME}
       - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME}
-      - LLM_SERVICE_URL=${LLM_SERVICE_URL}
+      - BACKEND_URL=http://backend:${BACKEND_INTERNAL_PORT}
       - EMBEDDING_DIM=${EMBEDDING_DIM}
+      - MLFLOW_TRACKING_URI=http://mlflow:${MLFLOW_INTERNAL_PORT}
+      - MODEL_GEN=${MODEL_GEN}
+      # MLflow S3/MinIO credentials for artifact storage
+      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY}
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:${MINIO_API_PORT}
+      - MLFLOW_S3_IGNORE_TLS=true
     volumes:
-      - ./dags:/opt/airflow/dags
-      - ./airflow_tasks:/opt/airflow/airflow_tasks
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/common:/opt/airflow/common
+      - ./airflow/pipelines:/opt/airflow/pipelines
+      - ./airflow/logs:/opt/airflow/logs
     deploy:
       resources:
         limits:
@@ -466,42 +408,71 @@ services:
       retries: 5
       start_period: 30s
 
+  # Airflow Worker for executing tasks
   airflow-worker:
     build:
       context: .
       dockerfile: airflow/Dockerfile
+      args:
+        - AIRFLOW_USER=${AIRFLOW_WWW_USER_USERNAME}
     restart: always
     depends_on:
-      - postgres
-      - redis
-      - airflow-init
-      - fluentd
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+      fluentd:
+        condition: service_started
     environment:
+      # Airflow core settings
       - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
-      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}
-      - AIRFLOW__CELERY__BROKER_URL=redis://redis:${REDIS_PORT}/0
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB_AIRFLOW}
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB_AIRFLOW}
+      - AIRFLOW__CELERY__BROKER_URL=redis://redis:${REDIS_PORT}/${REDIS_DB}
       - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY}
       - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=false
       - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth
+      - AIRFLOW__DAGS__OWNER=${AIRFLOW_DAGS_OWNER}
+      - AIRFLOW__CORE__EXECUTION_API_SERVER_URL=http://airflow-api:${AIRFLOW_API_INTERNAL_PORT}/execution/
+      - AIRFLOW__CELERY__WORKER_CONCURRENCY=${AIRFLOW_TASK_WORKERS}
+      # Task SDK authentication
+      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.default
+      - AIRFLOW__CORE__AUTH_MANAGER=airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      - AIRFLOW__API_AUTH__JWT_SECRET=${AIRFLOW_FERNET_KEY}
+      - AIRFLOW__CORE__INTERNAL_API_SECRET_KEY=${AIRFLOW_FERNET_KEY}
+      # Airflow 3.x: DAG serialization settings
+      - AIRFLOW__CORE__MIN_SERIALIZED_DAG_UPDATE_INTERVAL=30
+      - AIRFLOW__CORE__MIN_SERIALIZED_DAG_FETCH_INTERVAL=10
       # Worker env vars for tasks
-      - REDIS_HOST=${REDIS_HOST}
-      - REDIS_PORT=${REDIS_PORT}
-      - REDIS_DB=${REDIS_DB}
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - REDIS_RETRIES=${REDIS_RETRIES}
       - MILVUS_URI=${MILVUS_URI}
       - MILVUS_DB_NAME=${MILVUS_DB_NAME}
       - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME}
-      - LLM_SERVICE_URL=${LLM_SERVICE_URL}
+      - BACKEND_URL=http://backend:${BACKEND_INTERNAL_PORT}
       - EMBEDDING_DIM=${EMBEDDING_DIM}
-      - PYTHONPATH=/opt/airflow/airflow_tasks
-      # Limit concurrency to prevent OOM with 1G memory limit
-      - AIRFLOW__CELERY__WORKER_CONCURRENCY=1
+      - MLFLOW_TRACKING_URI=http://mlflow:${MLFLOW_INTERNAL_PORT}
+      - MODEL_GEN=${MODEL_GEN}
+      - PYTHONPATH=/opt/airflow
+      - MIN_POSTS_FOR_OVERVIEW=${MIN_POSTS_FOR_OVERVIEW}
+      - UMAP_N_NEIGHBORS=${UMAP_N_NEIGHBORS}
+      - UMAP_MIN_DIST=${UMAP_MIN_DIST}
+      - UMAP_N_COMPONENTS=${UMAP_N_COMPONENTS}
+      - UMAP_METRIC=${UMAP_METRIC}
+      - HDBSCAN_MIN_CLUSTER_SIZE=${HDBSCAN_MIN_CLUSTER_SIZE}
+      - HDBSCAN_MIN_SAMPLES=${HDBSCAN_MIN_SAMPLES}
+      - HDBSCAN_METRIC=${HDBSCAN_METRIC}
+      - REQUEST_TIMEOUT=${REQUEST_TIMEOUT}
+      # MLflow S3/MinIO credentials for artifact storage
+      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY}
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:${MINIO_API_PORT}
+      - MLFLOW_S3_IGNORE_TLS=true
     volumes:
-      - ./dags:/opt/airflow/dags
-      - ./airflow_tasks:/opt/airflow/airflow_tasks
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/common:/opt/airflow/common
+      - ./airflow/pipelines:/opt/airflow/pipelines
+      - ./airflow/logs:/opt/airflow/logs
     deploy:
       resources:
         limits:
@@ -518,13 +489,153 @@ services:
       retries: 5
       start_period: 30s
 
+  # Airflow Initialization to setup DB and create admin user
+  airflow-init:
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Airflow core settings
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB_AIRFLOW}
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB_AIRFLOW}
+      - AIRFLOW__CELERY__BROKER_URL=redis://redis:${REDIS_PORT}/${REDIS_DB}
+      - AIRFLOW__CORE__LOAD_EXAMPLES=false
+      - AIRFLOW__CORE__STORE_SERIALIZED_DAGS=True
+      - AIRFLOW__CORE__STORE_DAG_CODE=True
+      - _AIRFLOW_WWW_USER_CREATE=True
+      # Task SDK authentication
+      - AIRFLOW__CORE__AUTH_MANAGER=airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY}
+      - _AIRFLOW_WWW_USER_USERNAME=${AIRFLOW_WWW_USER_USERNAME}
+      - _AIRFLOW_WWW_USER_PASSWORD=${AIRFLOW_WWW_USER_PASSWORD}
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/common:/opt/airflow/common
+      - ./airflow/pipelines:/opt/airflow/pipelines
+    command:
+      # Initialize the Airflow DB, create admin user, and serialize DAGs
+      - bash
+      - -c
+      - |
+        echo "Waiting for database to be ready..."
+        sleep 5
+        echo "Running database migration..."
+        airflow db migrate
+        echo "Creating admin user..."
+        airflow users create \
+          --username "${AIRFLOW_WWW_USER_USERNAME}" \
+          --password "${AIRFLOW_WWW_USER_PASSWORD}" \
+          --role Admin || echo "User already exists"
+        echo "Serializing DAGs..."
+        airflow dags reserialize || echo "DAG serialization completed"
+        echo "Initialization complete!"
+    networks:
+      - upskill-scout-network
+    restart: "no"
+
+  # MLflow tracking server for experiment and model management
+  mlflow:
+    build: ./mlflow
+    container_name: mlflow
+    ports:
+      - "${MLFLOW_PORT}:${MLFLOW_INTERNAL_PORT}"
+    environment:
+      - MLFLOW_BACKEND_STORE_URI=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB_MLFLOW}
+      - MLFLOW_ARTIFACT_ROOT=s3://${MLFLOW_BUCKET_NAME_MINIO}/
+      - MLFLOW_TRACKING_URI=http://mlflow:${MLFLOW_PORT}
+      - MLFLOW_ALLOWED_HOSTS=0.0.0.0:${MLFLOW_PORT},localhost:${MLFLOW_PORT},mlflow:${MLFLOW_INTERNAL_PORT}
+      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY}
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:${MINIO_API_PORT}
+      - MLFLOW_S3_IGNORE_TLS=true
+      - MLFLOW_ENABLE_TRACING=true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${MLFLOW_INTERNAL_PORT}/"]
+      start_period: 10s
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    volumes:
+      - ./mlflow/artifacts:/mlflow/artifacts
+    depends_on:
+      - postgres
+      - minio
+      - fluentd
+    command:
+      - /bin/sh
+      - -c
+      - |
+        mlflow server \
+          --host 0.0.0.0 \
+          --port ${MLFLOW_INTERNAL_PORT} \
+          --default-artifact-root "$${MLFLOW_ARTIFACT_ROOT}" \
+          --backend-store-uri "$${MLFLOW_BACKEND_STORE_URI}" \
+          --allowed-hosts "$${MLFLOW_ALLOWED_HOSTS}"
+    networks:
+      - upskill-scout-network
+    logging:
+      driver: "fluentd"
+      options:
+        fluentd-address: "localhost:${FLUENTD_PORT}"
+        mode: non-blocking
+        tag: "mlflow"
+
+# Docker volumes for persistent storage
 volumes:
-  milvus_data:
   redis_data:
-  redisinsight_data:
   ollama_data:
   postgres_data:
 
+# Docker networks for service communication, simplified to a single network for now TODO change for production
 networks:
   upskill-scout-network:
     driver: bridge
+
+# Using local Llama for macOS GPU acceleration (not possible via Docker Ollama on macOS at this time)
+# ollama:
+#   image: ollama/ollama:latest
+#   container_name: ollama
+#   ports:
+#     - "${OLLAMA_PORT}:${OLLAMA_INTERNAL_PORT}"
+#   volumes:
+#     - ollama_data:/root/.ollama
+#     - ./ollama/init_ollama_models.sh:/init_ollama_models.sh
+#   environment:
+#     - MODEL_GEN=${MODEL_GEN}
+#     - MODEL_EMB=${MODEL_EMB}
+#     - OLLAMA_PORT=${OLLAMA_PORT}
+#   networks:
+#     - upskill-scout-network
+#   depends_on:
+#     - fluentd
+#   restart: unless-stopped
+#   deploy:
+#     resources:
+#       limits:
+#         memory: 8G
+#       reservations:
+#         memory: 4G
+#   healthcheck:
+#     test: "bash -c 'cat < /dev/null > /dev/tcp/localhost/${OLLAMA_INTERNAL_PORT}'"
+#     interval: 30s
+#     timeout: 10s
+#     retries: 5
+#     start_period: 30s
+#   # Run the init script after the service starts
+#   entrypoint: ["/bin/sh", "-c"]
+#   command:
+#     - |
+#       /bin/ollama serve &
+#       /init_ollama_models.sh
+#       wait
+#   logging:
+#     driver: "fluentd"
+#     options:
+#       fluentd-address: "localhost:${FLUENTD_PORT}"
+#       mode: non-blocking
+#       tag: "ollama"

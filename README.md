@@ -1,50 +1,31 @@
-# upskill-scout
+# Upskill Scout
 
-Skill analysis and upskilling recommendations powered by LLMs and vector search.
+## Purpose
+To analyze and organize **project or job postings that the user is interested in evolving into**, utilizing a sophisticated hybrid AI architecture to identify strategic, personalized growth opportunities.
+
+## Hybrid AI Architecture
+This project demonstrates a sophisticated synthesis of AI paradigms, assigning tasks to the models best suited for them:
+
+- **Generative AI (LLMs)**: Utilized for **extraction and nuance**. Local LLMs parse unstructured job data to identify skills with human-level understanding.
+- **Classical ML (UMAP + HDBSCAN)**: Utilized for **structure and pattern discovery**. Mathematical density-based clustering provides stable, deterministic insights that LLMs often hallucinate.
+
+By combining these via **Vector Search**, the system achieves a level of privacy, scalability, and analytical depth that neither approach could achieve alone.
 
 ## Quick Start
-
-# macOS: Ensure to run e.g. colima Docker with enough (custom) memory, e.g. colima start --memory 16
-
 ```bash
 cp .env.example .env
 docker-compose up
 ```
 
-**First run:** Downloads Ollama models (~500MB-1GB). Takes 2-5 minutes.
+## Technologies
+Built with state-of-the-art technologies for scalable, local-first ML pipelines:
+- **Orchestration**: Apache Airflow (Celery Executor)
+- **API**: FastAPI (High performance async framework)
+- **AI/LLM**: Ollama (Local LLMs for privacy & cost)
+- **Vector Search**: Milvus (High-scale vector database)
+- **ML Ops**: MLflow (Experiment tracking & model registry)
+- **Clustering**: UMAP + HDBSCAN (State-of-the-art unsupervised learning)
+- **Infrastructure**: Docker Compose, MinIO (S3), Redis, Fluentd, PostgreSQL
 
-## Architecture
-
-**Services:**
-- **Backend** (FastAPI) - API endpoints for job submission
-- **Airflow** - Orchestrates 4-step processing pipeline
-- **LLM Service** - Ollama wrapper for text generation & embeddings
-- **Milvus** - Vector database for semantic skill search
-- **Redis** - Job status cache
-- **MinIO** - Object storage
-- **Fluentd** - Centralized logging
-
-**How It Works:**
-1. **Submit** - POST job description to `/text` endpoint
-2. **Cleanse** - Lowercase & remove non-ASCII characters
-3. **Extract** - LLM extracts job title and skills from text
-4. **Embed** - Generate 768-dim vectors for each skill
-5. **Persist** - Store skills & embeddings in Milvus for semantic search
-
-Each step runs as an Airflow task, passing data via XCom. Status tracked in Redis.
-
-## Configuration
-
-Edit `.env` to customize:
-- `MODEL_GEN` - Text generation model (default: gemma3:270m)
-- `MODEL_EMB` - Embedding model (default: embeddinggemma:300m-qat-q8_0)
-- `EMBEDDING_DIM` - Vector dimensions (default: 768)
-- `GEN_TEMPERATURE` - Generation randomness (default: 0.7)
-
-## Manage Models
-
-```bash
-docker exec ollama ollama list              # List models
-docker exec ollama ollama pull <model>      # Download model
-docker exec ollama ollama rm <model>        # Remove model
-```
+## Author
+Fabian Skalski
