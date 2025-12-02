@@ -183,7 +183,7 @@ class LLMService:
         last_error = None
         
         # Set up MLflow experiment
-        mlflow.set_experiment("cluster_descriptions")
+        mlflow.set_experiment("llm_skill_descriptions")
         
         with mlflow.start_run(run_name=f"describe_cluster_{len(skills)}_skills"):
             mlflow.log_param("model", self.model_gen)

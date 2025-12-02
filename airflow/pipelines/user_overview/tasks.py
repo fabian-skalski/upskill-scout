@@ -11,7 +11,7 @@ from hdbscan import HDBSCAN
 from pymilvus import MilvusClient
 
 from common.logging_config import setup_logging
-from common.config import get_settings
+from common.config import get_and_set_settings
 from common.clients.backend_client import BackendServiceClient
 from common.clients.milvus_client import (
     query_user_skills,
@@ -76,9 +76,12 @@ def reduce_dimensions(data: Dict[str, Any]) -> Dict[str, Any]:
         Data with UMAP coordinates added
     """
     logger.info("Reducing dimensions for user: %s", data["user_id"])
-    settings = get_settings()
+    settings = get_and_set_settings()
 
     embeddings = np.array(data["embeddings"])
+    
+    logger.info("UMAP parameters - n_neighbors: %d, min_dist: %.2f, n_components: %d, metric: %s", 
+                settings.umap_n_neighbors, settings.umap_min_dist, settings.umap_n_components, settings.umap_metric)
     
     # Check minimum samples
     if len(embeddings) < settings.min_posts_for_overview:
@@ -144,9 +147,12 @@ def cluster_skills(data: Dict[str, Any]) -> Dict[str, Any]:
         Data with cluster labels added
     """
     logger.info("Clustering skills for user: %s", data["user_id"])
-    settings = get_settings()
+    settings = get_and_set_settings()
 
     umap_coords = np.array(data["umap_coords"])
+    
+    logger.info("HDBSCAN parameters - min_cluster_size: %d, min_samples: %d, metric: %s", 
+                settings.hdbscan_min_cluster_size, settings.hdbscan_min_samples, settings.hdbscan_metric)
     
     # Set MLflow tracking
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
@@ -211,7 +217,7 @@ def describe_clusters(data: Dict[str, Any]) -> Dict[str, Any]:
         Data with cluster descriptions added
     """
     logger.info("Describing clusters for user: %s", data["user_id"])
-    settings = get_settings()
+    settings = get_and_set_settings()
     
     cluster_labels = data["cluster_labels"]
     skill_names = data["skill_names"]

@@ -5,7 +5,7 @@ Provides clean interfaces for interacting with the backend API.
 from typing import List, Tuple
 import requests
 from common.logging_config import setup_logging
-from common.config import get_settings
+from common.config import get_and_set_settings
 
 logger = setup_logging("backend_client")
 
@@ -20,7 +20,7 @@ class BackendServiceClient:
         Args:
             base_url: Base URL of the backend service
         """
-        settings = get_settings()
+        settings = get_and_set_settings()
         self.base_url = (base_url or settings.backend_url).rstrip('/')
         self.request_timeout = settings.request_timeout
     

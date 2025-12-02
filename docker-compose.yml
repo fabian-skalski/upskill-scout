@@ -301,26 +301,19 @@ services:
         condition: service_started
     environment:
       # Airflow core settings
-      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB_AIRFLOW}
       - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB_AIRFLOW}
       - AIRFLOW__CELERY__BROKER_URL=redis://redis:${REDIS_PORT}/${REDIS_DB}
       - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY}
-      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=false
-      - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.default
-      - AIRFLOW__WEBSERVER__WORKERS=${AIRFLOW_API_WORKERS}
-      - AIRFLOW__WEBSERVER__WORKER_REFRESH_INTERVAL=1800
-      - AIRFLOW__WEBSERVER__WEB_SERVER_MASTER_TIMEOUT=${REQUEST_TIMEOUT}
       # Task SDK JWT authentication
       - AIRFLOW__API_AUTH__JWT_SECRET=${AIRFLOW_FERNET_KEY}
-      - AIRFLOW__CORE__AUTH_MANAGER=airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
       - AIRFLOW__CORE__INTERNAL_API_SECRET_KEY=${AIRFLOW_FERNET_KEY}
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/common:/opt/airflow/common
       - ./airflow/pipelines:/opt/airflow/pipelines
       - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/airflow.cfg:/opt/airflow/airflow.cfg
     deploy:
       resources:
         limits:
@@ -357,41 +350,43 @@ services:
         condition: service_started
     environment:
       # Airflow core settings
-      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB_AIRFLOW}
       - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB_AIRFLOW}
       - AIRFLOW__CELERY__BROKER_URL=redis://redis:${REDIS_PORT}/${REDIS_DB}
       - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY}
-      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=false
-      - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.default
+      - AIRFLOW__DAGS__OWNER=${AIRFLOW_DAGS_OWNER}
       # Task SDK JWT authentication
-      - AIRFLOW__CORE__AUTH_MANAGER=airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
       - AIRFLOW__API_AUTH__JWT_SECRET=${AIRFLOW_FERNET_KEY}
       - AIRFLOW__CORE__INTERNAL_API_SECRET_KEY=${AIRFLOW_FERNET_KEY}
-      # Airflow 3.x: Force using serialized DAGs from DB
-      - AIRFLOW__CORE__MIN_SERIALIZED_DAG_UPDATE_INTERVAL=30
-      - AIRFLOW__CORE__MIN_SERIALIZED_DAG_FETCH_INTERVAL=10
-      - AIRFLOW__CORE__STORE_SERIALIZED_DAGS=True
-      - AIRFLOW__CORE__STORE_DAG_CODE=True
-      # Worker env vars for tasks
+      # Connectivity parameters
       - MILVUS_URI=${MILVUS_URI}
       - MILVUS_DB_NAME=${MILVUS_DB_NAME}
       - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME}
       - BACKEND_URL=http://backend:${BACKEND_INTERNAL_PORT}
-      - EMBEDDING_DIM=${EMBEDDING_DIM}
       - MLFLOW_TRACKING_URI=http://mlflow:${MLFLOW_INTERNAL_PORT}
-      - MODEL_GEN=${MODEL_GEN}
-      # MLflow S3/MinIO credentials for artifact storage
-      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY}
-      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY}
       - MLFLOW_S3_ENDPOINT_URL=http://minio:${MINIO_API_PORT}
       - MLFLOW_S3_IGNORE_TLS=true
+      - REQUEST_TIMEOUT=${REQUEST_TIMEOUT}
+      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY}
+      # ML & LLM hyperparameters
+      - EMBEDDING_DIM=${EMBEDDING_DIM}
+      - MODEL_GEN=${MODEL_GEN}
+      - MIN_POSTS_FOR_OVERVIEW=${MIN_POSTS_FOR_OVERVIEW}
+      - UMAP_N_NEIGHBORS=${UMAP_N_NEIGHBORS}
+      - UMAP_MIN_DIST=${UMAP_MIN_DIST}
+      - UMAP_N_COMPONENTS=${UMAP_N_COMPONENTS}
+      - UMAP_METRIC=${UMAP_METRIC}
+      - HDBSCAN_MIN_CLUSTER_SIZE=${HDBSCAN_MIN_CLUSTER_SIZE}
+      - HDBSCAN_MIN_SAMPLES=${HDBSCAN_MIN_SAMPLES}
+      - HDBSCAN_METRIC=${HDBSCAN_METRIC}
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/common:/opt/airflow/common
       - ./airflow/pipelines:/opt/airflow/pipelines
       - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/init_connections.py:/opt/airflow/init_connections.py
+      - ./airflow/airflow.cfg:/opt/airflow/airflow.cfg
     deploy:
       resources:
         limits:
@@ -400,7 +395,14 @@ services:
           memory: 512M
     networks:
       - upskill-scout-network
-    command: scheduler
+    command:
+      - bash
+      - -c
+      - |
+        echo "Initializing Airflow Variables..."
+        python /opt/airflow/init_connections.py
+        echo "Starting Airflow Scheduler..."
+        airflow scheduler
     healthcheck:
       test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\""]
       interval: 30s
@@ -427,52 +429,20 @@ services:
         condition: service_started
     environment:
       # Airflow core settings
-      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
       - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB_AIRFLOW}
       - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB_AIRFLOW}
       - AIRFLOW__CELERY__BROKER_URL=redis://redis:${REDIS_PORT}/${REDIS_DB}
       - AIRFLOW__CORE__FERNET_KEY=${AIRFLOW_FERNET_KEY}
-      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=false
-      - AIRFLOW__CORE__LOAD_EXAMPLES=false
-      - AIRFLOW__DAGS__OWNER=${AIRFLOW_DAGS_OWNER}
       - AIRFLOW__CORE__EXECUTION_API_SERVER_URL=http://airflow-api:${AIRFLOW_API_INTERNAL_PORT}/execution/
-      - AIRFLOW__CELERY__WORKER_CONCURRENCY=${AIRFLOW_TASK_WORKERS}
       # Task SDK authentication
-      - AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.default
-      - AIRFLOW__CORE__AUTH_MANAGER=airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
       - AIRFLOW__API_AUTH__JWT_SECRET=${AIRFLOW_FERNET_KEY}
       - AIRFLOW__CORE__INTERNAL_API_SECRET_KEY=${AIRFLOW_FERNET_KEY}
-      # Airflow 3.x: DAG serialization settings
-      - AIRFLOW__CORE__MIN_SERIALIZED_DAG_UPDATE_INTERVAL=30
-      - AIRFLOW__CORE__MIN_SERIALIZED_DAG_FETCH_INTERVAL=10
-      # Worker env vars for tasks
-      - MILVUS_URI=${MILVUS_URI}
-      - MILVUS_DB_NAME=${MILVUS_DB_NAME}
-      - MILVUS_COLLECTION_NAME=${MILVUS_COLLECTION_NAME}
-      - BACKEND_URL=http://backend:${BACKEND_INTERNAL_PORT}
-      - EMBEDDING_DIM=${EMBEDDING_DIM}
-      - MLFLOW_TRACKING_URI=http://mlflow:${MLFLOW_INTERNAL_PORT}
-      - MODEL_GEN=${MODEL_GEN}
-      - PYTHONPATH=/opt/airflow
-      - MIN_POSTS_FOR_OVERVIEW=${MIN_POSTS_FOR_OVERVIEW}
-      - UMAP_N_NEIGHBORS=${UMAP_N_NEIGHBORS}
-      - UMAP_MIN_DIST=${UMAP_MIN_DIST}
-      - UMAP_N_COMPONENTS=${UMAP_N_COMPONENTS}
-      - UMAP_METRIC=${UMAP_METRIC}
-      - HDBSCAN_MIN_CLUSTER_SIZE=${HDBSCAN_MIN_CLUSTER_SIZE}
-      - HDBSCAN_MIN_SAMPLES=${HDBSCAN_MIN_SAMPLES}
-      - HDBSCAN_METRIC=${HDBSCAN_METRIC}
-      - REQUEST_TIMEOUT=${REQUEST_TIMEOUT}
-      # MLflow S3/MinIO credentials for artifact storage
-      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY}
-      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY}
-      - MLFLOW_S3_ENDPOINT_URL=http://minio:${MINIO_API_PORT}
-      - MLFLOW_S3_IGNORE_TLS=true
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/common:/opt/airflow/common
       - ./airflow/pipelines:/opt/airflow/pipelines
       - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/airflow.cfg:/opt/airflow/airflow.cfg
     deploy:
       resources:
         limits:
@@ -481,7 +451,7 @@ services:
           memory: 512M
     networks:
       - upskill-scout-network
-    command: celery worker
+    command: airflow celery worker
     healthcheck:
       test: ["CMD-SHELL", "celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d celery@$${HOSTNAME}"]
       interval: 30s
@@ -548,7 +518,7 @@ services:
       - MLFLOW_BACKEND_STORE_URI=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB_MLFLOW}
       - MLFLOW_ARTIFACT_ROOT=s3://${MLFLOW_BUCKET_NAME_MINIO}/
       - MLFLOW_TRACKING_URI=http://mlflow:${MLFLOW_PORT}
-      - MLFLOW_ALLOWED_HOSTS=0.0.0.0:${MLFLOW_PORT},localhost:${MLFLOW_PORT},mlflow:${MLFLOW_INTERNAL_PORT}
+      - MLFLOW_ALLOWED_HOSTS=0.0.0.0:${MLFLOW_PORT},localhost:${MLFLOW_INTERNAL_PORT},localhost:${MLFLOW_PORT},mlflow:${MLFLOW_INTERNAL_PORT}
       - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY}
       - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY}
       - MLFLOW_S3_ENDPOINT_URL=http://minio:${MINIO_API_PORT}

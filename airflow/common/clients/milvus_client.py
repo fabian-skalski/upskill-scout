@@ -5,10 +5,10 @@ Provides clean interfaces for collection management and data persistence.
 from typing import List, Dict, Any
 from pymilvus import MilvusClient
 from common.logging_config import setup_logging
-from common.config import get_settings
+from common.config import get_and_set_settings
 
 logger = setup_logging("milvus_client")
-
+settings = get_and_set_settings()
 
 def get_milvus_client() -> MilvusClient:
     """
@@ -17,7 +17,6 @@ def get_milvus_client() -> MilvusClient:
     Returns:
         Configured MilvusClient
     """
-    settings = get_settings()
     return MilvusClient(uri=settings.milvus_uri, db_name=settings.milvus_db_name)
 
 
@@ -25,7 +24,6 @@ def ensure_collection_exists() -> None:
     """
     Ensure the Milvus collection exists, creating it if necessary.
     """
-    settings = get_settings()
     logger.info("Setting up Milvus collection: %s", settings.milvus_collection_name)
     client = get_milvus_client()
     
@@ -77,7 +75,6 @@ def insert_posting(
         timestamp: Timestamp when posted
     """
     logger.info("Persisting posting %s to Milvus", text_hash)
-    
     client = get_milvus_client()
     ensure_collection_exists()
     
@@ -109,7 +106,6 @@ def insert_posting(
         })
     
     # Insert into Milvus
-    settings = get_settings()
     result = client.insert(
         collection_name=settings.milvus_collection_name,
         data=data
@@ -130,10 +126,8 @@ def query_user_skills(user_id: str) -> List[Dict[str, Any]]:
         List of skill records with embeddings
     """
     logger.info("Querying skills for user: %s", user_id)
-    
+
     client = get_milvus_client()
-    settings = get_settings()
-    
     results = client.query(
         collection_name=settings.milvus_collection_name,
         filter=f'user_id == "{user_id}" && entity_type == "skill"',
@@ -151,7 +145,6 @@ def get_overview_collection_name() -> str:
     Returns:
         Overview collection name
     """
-    settings = get_settings()
     return f"{settings.milvus_collection_name}_overview"
 
 
@@ -162,7 +155,6 @@ def ensure_overview_collection_exists() -> None:
     """
     collection_name = get_overview_collection_name()
     logger.info("Setting up Milvus overview collection: %s", collection_name)
-    settings = get_settings()
     client = get_milvus_client()
     
     if client.has_collection(collection_name):

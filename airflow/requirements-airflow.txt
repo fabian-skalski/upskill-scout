@@ -11,3 +11,4 @@ psycopg2-binary
 asyncpg
 pydantic==2.12.5
 pydantic-settings==2.12.0
+apache-airflow-providers-celery==3.14.0

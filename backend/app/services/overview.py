@@ -147,7 +147,9 @@ class OverviewService:
         cluster_infos = []
         
         for c_id, data in clusters.items():
-            if c_id == -1:  # Skip noise cluster
+            # Include all clusters, even cluster -1 (Miscellaneous Skills)
+            # Only skip if there are multiple clusters and this is -1
+            if c_id == -1 and len(clusters) > 1:
                 continue
                 
             relevancy = (data["count"] / total_skills) * 100 if total_skills > 0 else 0
